@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard</title>
+
+  <!-- Early auth guard: redirects to login.html if no/expired token -->
+  <script>
+    (function enforceAuth() {
+      const t = localStorage.getItem('jwt');
+      if (!t) { location.replace('login.html'); return; }
+      try {
+        const payload = JSON.parse(
+          decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))))
+        );
+        if (!payload.exp || payload.exp * 1000 <= Date.now()) {
+          localStorage.removeItem('jwt'); localStorage.removeItem('user');
+          location.replace('login.html'); return;
+        }
+        window.CURRENT_USER = payload.sub || payload.identity || null;
+      } catch {
+        localStorage.removeItem('jwt'); localStorage.removeItem('user');
+        location.replace('login.html');
+      }
+    })();
+  </script>
+
+  <!-- Socket.IO client (Flask-SocketIO compatible) -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+
+  <style>
+   /* ===============================
+   THEME — Dark palette mapping
+   =============================== */
+:root{
+  --bg: #0b0f14;
+  --panel: #121821;
+  --muted: #a2adc3;
+  --text: #e9eef7;
+  --primary: #2f7cf6;
+  --danger: #e24a4a;
+  --border: #223046;
+  --bubble-mine: #1f2a3a;
+  --bubble-their: #0e1b2b;
+  --radius: 14px;
+  --gap: 12px;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  --surface: var(--panel);
+  --bubble-me: var(--bubble-mine);
+  --bubble-them: var(--bubble-their);
+  --primary-contrast: #ffffff;
+  --success: #22c55e;
+  --success-contrast:#ffffff;
+  --warning: #f59e0b;
+  --warning-contrast:#111827;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; padding: 0; display: flex; height: 100vh;
+  background: var(--bg); color: var(--text);
+}
+.sidebar {
+  width: 320px; border-right: 1px solid var(--border); padding: 16px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: var(--gap); background: var(--surface);
+}
+.brand { display:flex; justify-content:space-between; align-items:center; }
+.brand h2 { margin:0; font-size:18px; color: var(--text); }
+button {
+  padding:8px 10px; border-radius:8px; border: 1px solid var(--border); cursor: pointer; font-weight:600;
+  background: #142033; color: var(--text);
+}
+button:hover { filter: brightness(1.05); }
+.logout { background: var(--danger); color: #fff; border-color: transparent; }
+.logout:hover { filter: brightness(0.95); }
+.search { display:flex; gap:8px; }
+input[type="search"],
+input, .composer input {
+  flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px;
+  background:#0d1626; color: var(--text); outline: none;
+}
+input::placeholder { color: #6e7c96; }
+.result-list, .friends-list { overflow-y:auto; flex:1; display:block; padding-right:6px; }
+.user-row, .friend-row {
+  display:flex; justify-content:space-between; align-items:center; padding:8px;
+  border-bottom:1px solid var(--border);
+}
+.user-name { font-weight:700; color: var(--text); }
+.muted { color: var(--muted); font-size:13px; }
+.request-btn { background: var(--primary); color: var(--primary-contrast); border-color: transparent; }
+.request-btn:hover { filter: brightness(0.95); }
+.accept-btn { background: var(--success); color: var(--success-contrast); border-color: transparent; }
+.accept-btn:hover { filter: brightness(0.95); }
+.disabled {
+  background:#223043; color:#7f8aa3; cursor:default; border-color:#2e3d58;
+}
+.main { flex:1; display:flex; flex-direction:column; gap:var(--gap); background: var(--bg); }
+.chat-header {
+  padding:12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;
+  background: var(--surface);
+}
+.chat-area {
+  flex:1; padding:12px; overflow:auto; display:flex; flex-direction:column; gap:10px; background: var(--bg);
+}
+.message {
+  max-width:70%; padding:10px 12px; border-radius: var(--radius);
+  position:relative; box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+}
+.from-me   { align-self:flex-end; background: var(--bubble-me); border:1px solid var(--border); }
+.from-them { align-self:flex-start; background: var(--bubble-them); border:1px solid var(--border); }
+.msg-head {
+  display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; font-size:12px; color:var(--muted);
+}
+.msg-meta strong { color: var(--text); }
+.msg-time { margin-left:6px; font-size:12px; color:#8ea0be; white-space:nowrap; }
+.msg-actions { display:flex; align-items:center; gap:6px; }
+.msg-actions button {
+  font-size:12px; padding:4px 8px; border-radius:6px;
+  background: #0d1626; border:1px solid #4b2a2a; color:#ff9aa2;
+}
+.msg-actions button:hover { background:#1a0f12; }
+.chat-actions { display:flex; gap:8px; }
+.btn-yellow {
+  background: var(--warning); color: var(--warning-contrast); border-color: transparent;
+}
+.btn-yellow:hover { filter: brightness(0.95); }
+.btn-red {
+  background: var(--danger); color: #fff; border-color: transparent;
+}
+.btn-red:hover { filter: brightness(0.95); }
+.small-badge {
+  background:#ff3b30; color:#fff; padding:2px 6px; border-radius:12px; font-size:12px;
+}
+.empty { padding:12px; color: var(--muted); }
+.composer {
+  display:flex; gap:8px; padding:10px; border-top:1px solid var(--border); background: var(--surface);
+}
+@media (max-width: 900px) {
+  body { flex-direction: column; height: auto; min-height: 100vh; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .main { height: calc(100vh - 320px); }
+  .message { max-width: 88%; }
+}
+  </style>
+</head>
+
+<body>
+  <div class="sidebar">
+    <div class="brand">
+      <h2 id="welcome">Welcome</h2>
+      <button id="logout" class="logout" type="button">Logout</button>
+    </div>
+
+    <div>
+      <div class="search">
+        <input id="searchInput" type="search" placeholder="Search username..." />
+        <button id="searchBtn">Search</button>
+      </div>
+      <div id="searchResults" class="result-list" style="height:160px; margin-top:8px;"></div>
+    </div>
+
+    <div style="font-weight:700; margin-top:6px;">Friends</div>
+    <div id="friendsList" class="friends-list" style="height:calc(100% - 300px);"></div>
+  </div>
+
+  <div class="main">
+    <div class="chat-header">
+      <div>
+        <div style="font-weight:700;" id="chatTitle">Select a friend to chat</div>
+        <div class="muted" id="chatSub">No chat open</div>
+      </div>
+      <div id="friendMeta" class="chat-actions"></div>
+    </div>
+
+    <div id="chatArea" class="chat-area">
+      <div class="empty">Open a friend to start chatting in real time.</div>
+    </div>
+
+    <div class="composer" id="composer" style="display:none;">
+      <input id="messageInput" placeholder="Type a message..." />
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <!-- Inline JS: keyboard/back handling + smart auto-scroll + core chat -->
+  <script>
+    // ---------- Auth helpers ----------
+    function AppLogout() {
+      localStorage.removeItem('jwt');
+      localStorage.removeItem('user');
+      window.location.replace('login.html');
+    }
+    document.getElementById('logout').addEventListener('click', AppLogout);
+
+    const Auth = {
+      token: () => localStorage.getItem('jwt'),
+      user: () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } },
+    };
+
+    // ---------- API helper ----------
+    async function api(url, { method="GET", auth=false, body=null } = {}) {
+      const headers = { "Content-Type": "application/json" };
+      if (auth) headers["Authorization"] = "Bearer " + Auth.token();
+      const res = await fetch(url, { method, headers, body });
+      const ct = res.headers.get("content-type") || "";
+      const isJson = ct.includes("application/json");
+      const data = isJson ? await res.json().catch(()=>({})) : {};
+      if (!res.ok) throw new Error(data.error || data.msg || (res.status + " " + res.statusText));
+      return data;
+    }
+
+    // ---------- Elements ----------
+    const me = Auth.user();
+    const welcome = document.getElementById("welcome");
+    const searchInput = document.getElementById("searchInput");
+    const searchBtn = document.getElementById("searchBtn");
+    const searchResults = document.getElementById("searchResults");
+    const friendsList = document.getElementById("friendsList");
+    const chatTitle = document.getElementById("chatTitle");
+    const chatSub = document.getElementById("chatSub");
+    const friendMeta = document.getElementById("friendMeta");
+    const chatArea = document.getElementById("chatArea");
+    const composer = document.getElementById("composer");
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+
+    welcome.textContent = "Welcome, " + (me?.username || window.CURRENT_USER || "");
+
+    // ---------- State ----------
+    const state = { openWith: null, friends: [] };
+    const pendingByClientId = new Map(); // client-id -> DOM node
+
+    // ---------- Mobile keyboard/back handling ----------
+    let keyboardOpen = false;
+    let lastViewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+
+    // helper: are we scrolled near bottom?
+    function isUserAtBottom(threshold = 120) {
+      const el = chatArea;
+      return (el.scrollHeight - (el.scrollTop + el.clientHeight)) <= threshold;
+    }
+
+    // Smart scroll: scroll only when user is near bottom (do NOT auto-scroll just because keyboardOpen)
+    function smartScrollToBottom() {
+      if (isUserAtBottom()) {
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }
+    }
+
+    // VisualViewport changes (mostly mobile keyboards)
+    function onViewportResize() {
+      const v = window.visualViewport;
+      const current = v ? v.height : window.innerHeight;
+      if (current < lastViewportHeight - 100) {
+        keyboardOpen = true;
+      } else if (current >= lastViewportHeight - 50) {
+        keyboardOpen = false;
+      }
+      lastViewportHeight = current;
+    }
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', onViewportResize);
+    } else {
+      window.addEventListener('resize', onViewportResize);
+    }
+
+    // push a dummy history entry when focusing input so back button can be used to close keyboard
+    function pushDummyHistory() {
+      try { history.pushState({keyboardDummy: true}, ''); } catch(e) { /* ignore */ }
+    }
+
+    // when popstate occurs and keyboardOpen, blur input instead of navigating back
+    window.addEventListener('popstate', (e) => {
+      if (keyboardOpen && document.activeElement === messageInput) {
+        messageInput.blur();
+        setTimeout(() => {
+          try { history.pushState({keyboardDummy: true}, ''); } catch(e) {}
+        }, 50);
+      }
+    });
+
+    // wire focus/blur for composer to set keyboardOpen flag and manage history
+    messageInput.addEventListener('focus', () => {
+      keyboardOpen = true;
+      pushDummyHistory();
+      // keep scrolled to bottom so user can type (but don't force for new incoming messages)
+      setTimeout(() => { chatArea.scrollTop = chatArea.scrollHeight; }, 120);
+    });
+
+    messageInput.addEventListener('blur', () => {
+      setTimeout(() => { keyboardOpen = false; }, 80);
+    });
+
+    // ---------- Utility ----------
+    function escapeHtml(t){
+      return (t+"").replace(/[&<>"']/g, c => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[c]));
+    }
+    function genClientId(){ if (crypto?.randomUUID) return crypto.randomUUID(); return Date.now()+"-"+Math.random().toString(16).slice(2); }
+
+    // ---------- Render message ----------
+    function appendMessage(from, text, time, opts = {}) {
+      const currentName = (me?.username || window.CURRENT_USER);
+      const isMine = from === currentName;
+      const div = document.createElement("div");
+      div.className = "message " + (isMine ? "from-me" : "from-them");
+
+      if (opts.messageId) div.dataset.messageId = String(opts.messageId);
+      if (opts.clientId)  div.dataset.clientId  = String(opts.clientId);
+
+      const when = time ? new Date(time) : new Date();
+      const timeStr = when.toLocaleString();
+
+      div.innerHTML = `
+        <div class="msg-head">
+          <div class="msg-meta">
+            <strong>${escapeHtml(from)}</strong>
+            ${opts.pending
+              ? `<span class="muted" style="margin-left:6px;">• sending…</span>`
+              : `<span class="msg-time">${timeStr}</span>`}
+          </div>
+          ${isMine ? `
+            <div class="msg-actions">
+              <button class="danger" ${opts.messageId ? `onclick="requestDeleteMessage('${opts.messageId}')"` : ""}>Delete</button>
+            </div>
+          ` : `<div></div>`}
+        </div>
+
+        <div class="msg-text">${escapeHtml(text)}</div>
+      `;
+
+      if (isMine && !opts.messageId) {
+        const btn = div.querySelector(".msg-actions button");
+        if (btn) {
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            alert("Please wait… message ID not assigned yet.");
+          }, { once: true });
+        }
+      }
+
+      chatArea.appendChild(div);
+      return div;
+    }
+
+    function finalizeOptimisticBubble(node, payload) {
+      try {
+        const meta = node.querySelector('.msg-meta');
+        if (meta && payload.time) {
+          const nameEl = meta.querySelector('strong')?.outerHTML || '';
+          meta.innerHTML = `${nameEl}<span class="msg-time" style="margin-left:6px;">${new Date(payload.time).toLocaleString()}</span>`;
+        }
+        if (payload.id) node.dataset.messageId = String(payload.id);
+        const btn = node.querySelector('.msg-actions button');
+        if (btn) btn.setAttribute('onclick', `requestDeleteMessage(${payload.id})`);
+      } catch {}
+    }
+
+    function removeMessageDom(messageId) {
+      const el = chatArea.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+      if (el) el.remove();
+    }
+
+    // ---------- Friends / Search ----------
+    async function loadFriends(){
+      try { state.friends = await api("/api/friends",{auth:true}); renderFriends(); }
+      catch { friendsList.innerHTML = "<div class='empty'>Could not load friends.</div>"; }
+    }
+    function renderFriends(){
+      friendsList.innerHTML = "";
+      if (!state.friends.length){ friendsList.innerHTML = "<div class='empty'>No friends yet.</div>"; return; }
+      state.friends.forEach(f=>{
+        const row = document.createElement("div"); row.className="friend-row";
+        row.innerHTML = `<div><div class="user-name">${f.username}</div><div class="muted">Chat</div></div>`;
+        const act = document.createElement("div"); const b=document.createElement("button"); b.textContent="Open"; b.onclick=()=>openChat(f.username);
+        act.appendChild(b); row.appendChild(act); friendsList.appendChild(row);
+      });
+    }
+
+    /* renderSearch: when query empty show incoming/outgoing requests only.
+       when query present search all users. */
+    async function renderSearch(q=""){
+      searchResults.innerHTML = "";
+      const qn = (q || "").trim();
+
+      let requests = { incoming: [], outgoing: [] };
+      try { requests = await api("/api/friend/requests", { auth: true }); } catch (e) { /* ignore */ }
+
+      const incomingSet = new Set((requests.incoming || []).map(x => x.from));
+      const outgoingSet = new Set((requests.outgoing || []).map(x => x.to));
+      const myFriends = new Set((state.friends || []).map(x => x.username));
+
+      if (!qn) {
+        const shown = new Map();
+        (requests.incoming || []).forEach(r => {
+          if (r.from === (me?.username || window.CURRENT_USER)) return;
+          shown.set(r.from, { username: r.from, email: r.email || "", type: "incoming" });
+        });
+        (requests.outgoing || []).forEach(r => {
+          if (r.to === (me?.username || window.CURRENT_USER)) return;
+          if (!shown.has(r.to)) shown.set(r.to, { username: r.to, email: r.email || "", type: "outgoing" });
+        });
+
+        if (!shown.size) {
+          searchResults.innerHTML = '<div class="empty">No incoming/outgoing requests.</div>';
+          return;
+        }
+
+        shown.forEach(u => {
+          const row = document.createElement('div'); row.className = 'user-row';
+          row.innerHTML = `<div><div class="user-name">${u.username}</div><div class="muted">${u.email || ""}</div></div>`;
+          const actions = document.createElement('div');
+          if (u.type === "incoming") {
+            const b = document.createElement('button'); b.className='accept-btn'; b.textContent='Accept';
+            b.onclick = () => acceptRequest(u.username);
+            actions.appendChild(b);
+          } else if (u.type === "outgoing") {
+            const b = document.createElement('button'); b.className='disabled'; b.textContent='Request sent';
+            actions.appendChild(b);
+          }
+          row.appendChild(actions);
+          searchResults.appendChild(row);
+        });
+        return;
+      }
+
+      try {
+        const results = await api(`/api/search?q=${encodeURIComponent(qn)}`, { auth:true });
+        if (!results || !results.length) {
+          searchResults.innerHTML = '<div class="empty">No users found.</div>';
+          return;
+        }
+        results.forEach(u => {
+          if (!u || u.username === (me?.username || window.CURRENT_USER)) return;
+          const row = document.createElement('div'); row.className = 'user-row';
+          row.innerHTML = `<div><div class="user-name">${u.username}</div><div class="muted">${u.email || ""}</div></div>`;
+          const actions = document.createElement('div');
+          if (myFriends.has(u.username)) {
+            const b = document.createElement('button'); b.className = 'disabled'; b.textContent = 'Friends';
+            actions.appendChild(b);
+          } else if (incomingSet.has(u.username)) {
+            const b = document.createElement('button'); b.className='accept-btn'; b.textContent='Accept';
+            b.onclick = () => acceptRequest(u.username);
+            actions.appendChild(b);
+          } else if (outgoingSet.has(u.username)) {
+            const b = document.createElement('button'); b.className='disabled'; b.textContent='Request sent';
+            actions.appendChild(b);
+          } else {
+            const b = document.createElement('button'); b.className='request-btn'; b.textContent='Send Request';
+            b.onclick = () => sendRequest(u.username);
+            actions.appendChild(b);
+          }
+          row.appendChild(actions);
+          searchResults.appendChild(row);
+        });
+      } catch (err) {
+        searchResults.innerHTML = `<div class="empty">${err.message || 'Failed to search'}</div>`;
+      }
+    }
+
+    async function sendRequest(toUser){
+      try{
+        const res = await api("/api/friend/request",{ method:"POST", auth:true, body:JSON.stringify({to:toUser}) });
+        alert(res.msg === "accepted" ? `You and ${toUser} are now friends!` : `Request sent to ${toUser}`);
+        await loadFriends(); await renderSearch(searchInput.value);
+      }catch(err){ alert(err.message||"Failed to send request"); }
+    }
+
+    async function acceptRequest(fromUser){
+      try{ await api("/api/friend/accept",{ method:"POST", auth:true, body:JSON.stringify({from:fromUser}) });
+        alert("Friend added"); await loadFriends(); await renderSearch(searchInput.value);
+      }catch(err){ alert(err.message); }
+    }
+
+    // ---------- Chat open / load ----------
+    async function openChat(friend){
+      state.openWith = friend;
+      chatTitle.textContent = friend;
+      chatSub.textContent = `Chatting with ${friend}`;
+      composer.style.display = "flex";
+
+      friendMeta.innerHTML = `
+        <button class="btn-yellow" id="btnClearChat" type="button">Clear Chat</button>
+        <button class="btn-red" id="btnRemoveFriend" type="button">Remove Friend</button>
+      `;
+      document.getElementById("btnClearChat").onclick = () => clearChat(friend);
+      document.getElementById("btnRemoveFriend").onclick = () => removeFriend(friend);
+
+      await loadChat(friend);
+    }
+
+    async function loadChat(friend){
+      chatArea.innerHTML = "";
+      try{
+        const msgs = await api(`/api/messages/${friend}`, { auth:true });
+        if (!msgs.length){ chatArea.innerHTML = "<div class='empty'>No messages yet.</div>"; return; }
+        msgs.forEach(m=>{
+          const fromName = (m.from_user === (me?.id)) ? (me.username || window.CURRENT_USER) : friend;
+          appendMessage(fromName, m.text, m.created_at, { messageId: m.id });
+        });
+        // when opening chat we want to show bottom
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }catch(err){ chatArea.innerHTML = `<div class="empty">${err.message}</div>`; }
+    }
+
+    // ---------- Socket ----------
+    const socket = io({ auth:{ token: Auth.token() }, transports:['websocket','polling'], reconnection:true });
+    socket.on('connect', ()=> console.log('socket connected'));
+    socket.on('connect_error', e=> console.error('socket error:', e?.message||e));
+
+    // New message flow (supports optimistic -> finalize)
+    socket.on("new_message", payload=>{
+      if (!(state.openWith === payload.from || state.openWith === payload.to)) return;
+
+      if (payload.client_id && pendingByClientId.has(payload.client_id)) {
+        const node = pendingByClientId.get(payload.client_id);
+        finalizeOptimisticBubble(node, payload);
+        pendingByClientId.delete(payload.client_id);
+        // do NOT auto-scroll simply because keyboard is open; only if user is at bottom
+        if (isUserAtBottom()) chatArea.scrollTop = chatArea.scrollHeight;
+        return;
+      }
+
+      appendMessage(payload.from, payload.text, payload.time || payload.created_at, { messageId: payload.id });
+
+      // Only auto-scroll if user is already near bottom (do NOT auto-scroll if keyboard is open)
+      smartScrollToBottom();
+    });
+
+    socket.on("message_deleted", ({ id, by, with: withUser })=>{
+      if (!state.openWith) return;
+      if (!(state.openWith === by || state.openWith === withUser)) return;
+      removeMessageDom(id);
+    });
+
+    socket.on("chat_cleared", (data) => {
+      if (!state.openWith) return;
+      if (state.openWith === data.by || state.openWith === data.with) {
+        chatArea.innerHTML = "<div class='empty'>Chat cleared.</div>";
+      }
+    });
+
+    // ---------- Actions ----------
+    function requestDeleteMessage(messageId){
+      if (!state.openWith) return;
+      socket.emit("delete_message", { id: Number(messageId), with: state.openWith, token: Auth.token() });
+    }
+
+    function clearChat(friend){
+      socket.emit("clear_chat", { with: friend, token: Auth.token() });
+    }
+
+    async function removeFriend(friend){
+      try {
+        await api("/api/friend/remove", {
+          method: "POST", auth: true,
+          body: JSON.stringify({ with: friend })
+        });
+        if (state.openWith === friend) {
+          state.openWith = null;
+          chatTitle.textContent = "Select a friend to chat";
+          chatSub.textContent = "No chat open";
+          composer.style.display = "none";
+          friendMeta.innerHTML = "";
+          chatArea.innerHTML = "<div class='empty'>Open a friend to start chatting in real time.</div>";
+        }
+        await loadFriends();
+        await renderSearch(searchInput.value);
+      } catch (e) {
+        alert(e.message || "Failed to remove friend");
+      }
+    }
+
+    // ---------- Send (optimistic) ----------
+    sendBtn.addEventListener("click", onSend);
+    messageInput.addEventListener("keyup", e=> { if (e.key === "Enter") onSend(); });
+
+    function onSend(){
+      const txt = messageInput.value.trim();
+      if (!txt || !state.openWith) return;
+      const clientId = genClientId();
+      const node = appendMessage(me.username || window.CURRENT_USER, txt, new Date().toISOString(), { pending:true, clientId });
+      pendingByClientId.set(clientId, node);
+
+      // IMPORTANT: keep the input focused so mobile keyboard stays open
+      try {
+        // prevent scroll side-effects when focusing
+        messageInput.focus({ preventScroll: true });
+      } catch (e) {
+        // older browsers fallback
+        messageInput.focus();
+      }
+
+      socket.emit("send_message", { to: state.openWith, text: txt, token: Auth.token(), client_id: clientId });
+      messageInput.value = "";
+
+      // Do NOT auto-scroll simply because keyboard is open — only if user was already near bottom
+      if (isUserAtBottom()) chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    // ---------- Wire search ----------
+    searchBtn.addEventListener("click", ()=>renderSearch(searchInput.value));
+    searchInput.addEventListener("keyup", e=>{ if (e.key === "Enter") renderSearch(searchInput.value); });
+
+    // ---------- Boot ----------
+    loadFriends(); renderSearch("");
+
+    // keep viewport / keyboard state fresh on rotation
+    window.addEventListener('orientationchange', () => setTimeout(onViewportResize, 300));
+  </script>
+</body>
+</html>

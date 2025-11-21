@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Register • Chat App</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <h1>Create account</h1>
+      <p class="muted">It’s quick and easy</p>
+
+      <form id="registerForm" class="form">
+        <label>
+          <span>Username</span>
+          <input type="text" id="username" required />
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" id="email" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" id="password" required />
+        </label>
+        <button type="submit" class="btn primary">Register</button>
+      </form>
+
+      <p class="muted small">
+        Already have an account?
+        <a href="/">Login</a>
+      </p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    document.getElementById('registerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        await api('/api/register', {
+          method: 'POST',
+          body: JSON.stringify({ username, email, password })
+        });
+        toast('Registered! Please login.');
+        location.replace('/');
+      } catch (err) {
+        toast(err.message || 'Registration failed', true);
+      }
+    });
+  </script>
+</body>
+</html>
